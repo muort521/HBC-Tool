@@ -103,7 +103,7 @@ def do_disassemble(hbc_file_path: str, output_dir: str) -> Dict[str, Any]:
         
         # 导出 HASM
         try:
-            hasm.dump(hbc_obj, output_dir, force=True)
+            hasm.dump(hbc_obj, output_dir, version, force=True)
             dump_success = True
         except Exception as dump_err:
             print(f"❌ hasm.dump() 异常: {dump_err}")

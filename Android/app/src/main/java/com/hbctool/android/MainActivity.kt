@@ -40,6 +40,8 @@ class MainActivity : AppCompatActivity() {
     private var selectedFilePath: String? = null
     private var lastOutputDir: String? = null  // 记录最后的输出目录
     private var isDisassembledOutput: Boolean = false  // 标记输出是否是反汇编生成的
+    private var isOperationRunning: Boolean = false  // 标记是否有操作正在运行，防止重复点击
+    private val maxLogLines = 500  // 日志最大行数，防止UI卡顿
     
     // 文件选择器
     private val filePickerLauncher = registerForActivityResult(
@@ -456,10 +458,17 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun performDisassemble(inputPath: String) {
+        if (isOperationRunning) {
+            Toast.makeText(this, "当前有操作正在进行，请稍候...", Toast.LENGTH_SHORT).show()
+            return
+        }
+        
         lifecycleScope.launch {
             try {
+                isOperationRunning = true
                 showProgress(true)
                 binding.disassembleButton.isEnabled = false
+                binding.assembleButton.isEnabled = false
                 
                 appendLog("\n========== 开始反汇编 ==========")
                 appendLog("输入文件: $inputPath")
@@ -469,9 +478,9 @@ class MainActivity : AppCompatActivity() {
                 outputDir.mkdirs()
                 appendLog("输出目录: ${outputDir.absolutePath}")
                 
-                val result = withContext(Dispatchers.IO) {
+                val result = withContext(Dispatchers.Default) {
                     try {
-                        // 调用 Python
+                        // 调用 Python (CPU密集型任务使用 Dispatchers.Default)
                         val python = Python.getInstance()
                         val bridge = python.getModule("api_bridge")
                         
@@ -496,9 +505,9 @@ class MainActivity : AppCompatActivity() {
                 
                     if (status == "success") {
                         appendLog("✓ 反汇编完成！")
-                        // 直接显示 Python 返回的日志（包含版本、文件大小等信息）
+                        // 显示 Python 返回的日志（截断过长内容，避免UI卡顿）
                         if (log.isNotEmpty()) {
-                            appendLog(log)
+                            appendTruncatedLog(log)
                         }
                         // 记录输出目录并启用删除和导出按钮
                         lastOutputDir = outputDir.absolutePath
@@ -511,7 +520,7 @@ class MainActivity : AppCompatActivity() {
                     } else {
                         appendLog("❌ 反汇编失败")
                         if (log.isNotEmpty()) {
-                            appendLog(log)
+                            appendTruncatedLog(log)
                         }
                         if (error != null) {
                             appendLog("错误详情: $error")
@@ -530,15 +539,53 @@ class MainActivity : AppCompatActivity() {
             } finally {
                 showProgress(false)
                 binding.disassembleButton.isEnabled = true
+                binding.assembleButton.isEnabled = true
+                isOperationRunning = false
             }
         }
     }
     
+    /**
+     * 截断过长的日志后追加显示，避免UI卡顿
+     */
+    private fun appendTruncatedLog(log: String) {
+        val lines = log.lines()
+        if (lines.size <= 50) {
+            // 日志不多，直接显示
+            for (line in lines) {
+                if (line.isNotBlank()) {
+                    appendLog(line)
+                }
+            }
+        } else {
+            // 日志过多，只显示前20行和最后20行
+            val firstLines = lines.take(20).filter { it.isNotBlank() }
+            val lastLines = lines.takeLast(20).filter { it.isNotBlank() }
+            val skipped = lines.size - firstLines.size - lastLines.size
+            
+            for (line in firstLines) {
+                appendLog(line)
+            }
+            appendLog("...（中间省略 $skipped 行）...")
+            for (line in lastLines) {
+                appendLog(line)
+            }
+            appendLog("提示：完整输出请查看输出目录中的文件")
+        }
+    }
+    
     private fun performAssemble(inputPath: String) {
+        if (isOperationRunning) {
+            Toast.makeText(this, "当前有操作正在进行，请稍候...", Toast.LENGTH_SHORT).show()
+            return
+        }
+        
         lifecycleScope.launch {
             try {
+                isOperationRunning = true
                 showProgress(true)
                 binding.assembleButton.isEnabled = false
+                binding.disassembleButton.isEnabled = false
                 
                 appendLog("\n========== 开始汇编 ==========")
                 appendLog("输入文件: $inputPath")
@@ -548,7 +595,7 @@ class MainActivity : AppCompatActivity() {
                 outputDir.mkdirs()
                 appendLog("输出目录: ${outputDir.absolutePath}")
                 
-                val result = withContext(Dispatchers.IO) {
+                val result = withContext(Dispatchers.Default) {
                     try {
                         val python = Python.getInstance()
                         val bridge = python.getModule("api_bridge")
@@ -571,9 +618,9 @@ class MainActivity : AppCompatActivity() {
                 
                 if (status == "success") {
                     appendLog("✓ 汇编完成！")
-                    // 直接显示 Python 返回的日志（包含版本、文件大小等信息）
+                    // 显示 Python 返回的日志（截断过长内容，避免UI卡顿）
                     if (log.isNotEmpty()) {
-                        appendLog(log)
+                        appendTruncatedLog(log)
                     }
                     // 记录输出目录并启用删除和导出按钮
                     lastOutputDir = outputDir.absolutePath
@@ -586,7 +633,7 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     appendLog("❌ 汇编失败")
                     if (log.isNotEmpty()) {
-                        appendLog(log)
+                        appendTruncatedLog(log)
                     }
                     if (error != null) {
                         appendLog("错误详情: $error")
@@ -600,6 +647,8 @@ class MainActivity : AppCompatActivity() {
             } finally {
                 showProgress(false)
                 binding.assembleButton.isEnabled = true
+                binding.disassembleButton.isEnabled = true
+                isOperationRunning = false
             }
         }
     }
@@ -611,7 +660,57 @@ class MainActivity : AppCompatActivity() {
     private fun appendLog(message: String) {
         runOnUiThread {
             val timestamp = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
-            binding.logTextView.append("[$timestamp] $message\n")
+            val logLine = "[$timestamp] $message\n"
+            binding.logTextView.append(logLine)
+            
+            // 限制日志行数，防止过多文本导致UI卡顿
+            val text = binding.logTextView.text
+            if (text != null) {
+                val lineCount = binding.logTextView.lineCount
+                if (lineCount > maxLogLines) {
+                    // 只保留最后一半的日志
+                    val keepLines = maxLogLines / 2
+                    var lineStart = 0
+                    var linesToSkip = lineCount - keepLines
+                    for (i in 0 until linesToSkip) {
+                        lineStart = text.indexOf('\n', lineStart) + 1
+                        if (lineStart <= 0) break
+                    }
+                    if (lineStart > 0) {
+                        binding.logTextView.text = "（已省略 ${lineCount - keepLines} 行）\n" + text.substring(lineStart)
+                    }
+                }
+            }
+        }
+    }
+    
+    /**
+     * 批量追加日志（优化：一次性计算后设置，减少多次重绘）
+     */
+    private fun appendLogBulk(messages: List<String>) {
+        if (messages.isEmpty()) return
+        runOnUiThread {
+            val timestamp = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+            val sb = StringBuilder()
+            for (msg in messages) {
+                sb.append("[$timestamp] $msg\n")
+            }
+            binding.logTextView.append(sb.toString())
+            
+            // 限制日志行数
+            val text = binding.logTextView.text
+            if (text != null && binding.logTextView.lineCount > maxLogLines) {
+                val keepLines = maxLogLines / 2
+                var lineStart = 0
+                var linesToSkip = binding.logTextView.lineCount - keepLines
+                for (i in 0 until linesToSkip) {
+                    lineStart = text.indexOf('\n', lineStart) + 1
+                    if (lineStart <= 0) break
+                }
+                if (lineStart > 0) {
+                    binding.logTextView.text = "（已省略 ${linesToSkip} 行）\n" + text.substring(lineStart)
+                }
+            }
         }
     }
     
@@ -699,33 +798,49 @@ class MainActivity : AppCompatActivity() {
         val outputPath = lastOutputDir ?: return
         val outputDir = File(outputPath)
         
-        try {
-            contentResolver.openOutputStream(uri)?.use { outputStream ->
-                ZipOutputStream(outputStream).use { zipStream ->
-                    outputDir.walkTopDown().forEach { file ->
-                        if (file.isFile) {
-                            val relativePath = file.relativeTo(outputDir).path
-                            val zipEntry = ZipEntry(relativePath)
-                            zipStream.putNextEntry(zipEntry)
-                            
-                            FileInputStream(file).use { inputStream ->
-                                inputStream.copyTo(zipStream)
+        if (isOperationRunning) {
+            Toast.makeText(this, "当前有操作正在进行，请稍候...", Toast.LENGTH_SHORT).show()
+            return
+        }
+        
+        lifecycleScope.launch {
+            isOperationRunning = true
+            showProgress(true)
+            
+            val success = withContext(Dispatchers.IO) {
+                try {
+                    contentResolver.openOutputStream(uri)?.use { outputStream ->
+                        ZipOutputStream(outputStream).use { zipStream ->
+                            outputDir.walkTopDown().forEach { file ->
+                                if (file.isFile) {
+                                    val relativePath = file.relativeTo(outputDir).path
+                                    val zipEntry = ZipEntry(relativePath)
+                                    zipStream.putNextEntry(zipEntry)
+                                    
+                                    FileInputStream(file).use { inputStream ->
+                                        inputStream.copyTo(zipStream)
+                                    }
+                                    zipStream.closeEntry()
+                                }
                             }
-                            zipStream.closeEntry()
                         }
                     }
+                    true
+                } catch (e: Exception) {
+                    appendLog("❌ 导出失败: ${e.message}")
+                    false
                 }
             }
             
-            runOnUiThread {
+            if (success) {
                 appendLog("✓ 文件已导出")
-                Toast.makeText(this, "导出成功", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@MainActivity, "导出成功", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this@MainActivity, "导出失败", Toast.LENGTH_SHORT).show()
             }
-        } catch (e: Exception) {
-            runOnUiThread {
-                appendLog("❌ 导出失败: ${e.message}")
-                Toast.makeText(this, "导出失败: ${e.message}", Toast.LENGTH_SHORT).show()
-            }
+            
+            showProgress(false)
+            isOperationRunning = false
         }
     }
     
@@ -788,135 +903,180 @@ class MainActivity : AppCompatActivity() {
         val outputPath = lastOutputDir ?: return
         val outputDir = File(outputPath)
         
-        try {
-            // 查找.bundle文件
-            val bundleFiles = outputDir.walkTopDown()
-                .filter { it.isFile && it.extension.equals("bundle", ignoreCase = true) }
-                .toList()
+        if (isOperationRunning) {
+            Toast.makeText(this, "当前有操作正在进行，请稍候...", Toast.LENGTH_SHORT).show()
+            return
+        }
+        
+        lifecycleScope.launch {
+            isOperationRunning = true
+            showProgress(true)
             
-            if (bundleFiles.isEmpty()) {
-                runOnUiThread {
-                    appendLog("❌ 导出失败：未找到Bundle文件")
-                    Toast.makeText(this, "未找到Bundle文件", Toast.LENGTH_SHORT).show()
+            val result = withContext(Dispatchers.IO) {
+                try {
+                    // 查找.bundle文件
+                    val bundleFiles = outputDir.walkTopDown()
+                        .filter { it.isFile && it.extension.equals("bundle", ignoreCase = true) }
+                        .toList()
+                    
+                    if (bundleFiles.isEmpty()) {
+                        Pair(false, "未找到Bundle文件")
+                    } else {
+                        val bundleFile = bundleFiles.first()
+                        
+                        contentResolver.openOutputStream(uri)?.use { outputStream ->
+                            FileInputStream(bundleFile).use { inputStream ->
+                                inputStream.copyTo(outputStream)
+                            }
+                        }
+                        
+                        Pair(true, bundleFile.name)
+                    }
+                } catch (e: Exception) {
+                    Pair(false, e.message ?: "未知错误")
                 }
-                return
             }
             
-            val bundleFile = bundleFiles.first()
-            
-            contentResolver.openOutputStream(uri)?.use { outputStream ->
-                FileInputStream(bundleFile).use { inputStream ->
-                    inputStream.copyTo(outputStream)
-                }
+            val (success, info) = result
+            if (success) {
+                appendLog("✓ Bundle文件已导出: $info")
+                Toast.makeText(this@MainActivity, "导出成功", Toast.LENGTH_SHORT).show()
+            } else {
+                appendLog("❌ 导出失败: $info")
+                Toast.makeText(this@MainActivity, "导出失败: $info", Toast.LENGTH_SHORT).show()
             }
             
-            runOnUiThread {
-                appendLog("✓ Bundle文件已导出: ${bundleFile.name}")
-                Toast.makeText(this, "导出成功", Toast.LENGTH_SHORT).show()
-            }
-        } catch (e: Exception) {
-            runOnUiThread {
-                appendLog("❌ 导出失败: ${e.message}")
-                Toast.makeText(this, "导出失败: ${e.message}", Toast.LENGTH_SHORT).show()
-            }
+            showProgress(false)
+            isOperationRunning = false
         }
     }
     
     private fun importFromUri(uri: Uri) {
-        try {
-            appendLog("\n========== 开始导入 ==========\n导入文件: ${getFileName(uri) ?: "未知"}")
+        if (isOperationRunning) {
+            Toast.makeText(this, "当前有操作正在进行，请稍候...", Toast.LENGTH_SHORT).show()
+            return
+        }
+        
+        val fileName = getFileName(uri) ?: "未知"
+        
+        lifecycleScope.launch {
+            isOperationRunning = true
+            showProgress(true)
             
-            // 创建新的输出目录
-            val outputDir = File(filesDir, "output/imported_${System.currentTimeMillis()}")
-            outputDir.mkdirs()
+            appendLog("\n========== 开始导入 ==========\n导入文件: $fileName")
             
-            var fileCount = 0
-            contentResolver.openInputStream(uri)?.use { inputStream ->
-                ZipInputStream(inputStream).use { zipStream ->
-                    var entry = zipStream.nextEntry
-                    while (entry != null) {
-                        if (!entry.isDirectory) {
-                            val file = File(outputDir, entry.name)
-                            file.parentFile?.mkdirs()
-                            
-                            FileOutputStream(file).use { outputStream ->
-                                zipStream.copyTo(outputStream)
+            val result = withContext(Dispatchers.IO) {
+                try {
+                    // 创建新的输出目录
+                    val outputDir = File(filesDir, "output/imported_${System.currentTimeMillis()}")
+                    outputDir.mkdirs()
+                    
+                    var fileCount = 0
+                    contentResolver.openInputStream(uri)?.use { inputStream ->
+                        ZipInputStream(inputStream).use { zipStream ->
+                            var entry = zipStream.nextEntry
+                            while (entry != null) {
+                                if (!entry.isDirectory) {
+                                    val file = File(outputDir, entry.name)
+                                    file.parentFile?.mkdirs()
+                                    
+                                    FileOutputStream(file).use { outputStream ->
+                                        zipStream.copyTo(outputStream)
+                                    }
+                                    fileCount++
+                                }
+                                zipStream.closeEntry()
+                                entry = zipStream.nextEntry
                             }
-                            fileCount++
                         }
-                        zipStream.closeEntry()
-                        entry = zipStream.nextEntry
                     }
+                    
+                    if (fileCount > 0) {
+                        // 检查是否有可处理的文件
+                        val hasmFiles = outputDir.walkTopDown()
+                            .filter { it.isFile && it.extension.equals("hasm", ignoreCase = true) }
+                            .toList()
+                        val bundleFiles = outputDir.walkTopDown()
+                            .filter { it.isFile && it.extension.equals("bundle", ignoreCase = true) }
+                            .toList()
+                        
+                        ImportResult(true, outputDir.absolutePath, fileCount, hasmFiles.size, bundleFiles.size)
+                    } else {
+                        outputDir.deleteRecursively()
+                        ImportResult(false, "", 0, 0, 0, "ZIP 文件为空")
+                    }
+                } catch (e: Exception) {
+                    ImportResult(false, "", 0, 0, 0, e.message ?: "未知错误")
                 }
             }
             
-            if (fileCount > 0) {
-                lastOutputDir = outputDir.absolutePath
-                isDisassembledOutput = true  // 导入的ZIP应该是反汇编文件
+            if (result.success) {
+                lastOutputDir = result.outputDir
+                isDisassembledOutput = true
                 binding.cleanEnvironmentButton.isEnabled = true
                 binding.exportButton.isEnabled = true
                 binding.exportBundleButton.isEnabled = false
                 
                 appendLog("✓ 导入完成！")
-                appendLog("解压文件数: $fileCount")
-                appendLog("输出目录: ${outputDir.name}")
-                
-                // 检查是否有可处理的文件（.hasm 或 .bundle）
-                val hasmFiles = outputDir.walkTopDown()
-                    .filter { it.isFile && it.extension.equals("hasm", ignoreCase = true) }
-                    .toList()
-                val bundleFiles = outputDir.walkTopDown()
-                    .filter { it.isFile && it.extension.equals("bundle", ignoreCase = true) }
-                    .toList()
+                appendLog("解压文件数: ${result.fileCount}")
+                appendLog("输出目录: ${File(result.outputDir).name}")
                 
                 when {
-                    hasmFiles.size == 1 && bundleFiles.isEmpty() -> {
-                        // 只有一个 .hasm 文件，自动加载用于汇编（需要目录路径）
-                        val hasmFile = hasmFiles.first()
+                    result.hasmCount == 1 && result.bundleCount == 0 -> {
+                        // 只有一个 .hasm 文件，自动加载
+                        val outputDir = File(result.outputDir)
+                        val hasmFile = outputDir.walkTopDown()
+                            .first { it.isFile && it.extension.equals("hasm", ignoreCase = true) }
                         hasmFile.parentFile?.let { parent ->
                             selectedFilePath = parent.absolutePath
                             binding.filePathText.text = "已选择目录: ${parent.name}\n（汇编需要完整目录）"
                             binding.assembleButton.isEnabled = true
                             binding.disassembleButton.isEnabled = false
-                            binding.cleanEnvironmentButton.isEnabled = true
                             appendLog("✓ 已自动加载 HASM 目录: ${parent.name}")
-                            Toast.makeText(this, "导入成功，已加载 ${parent.name}", Toast.LENGTH_SHORT).show()
                         }
+                        Toast.makeText(this@MainActivity, "导入成功", Toast.LENGTH_SHORT).show()
                     }
-                    bundleFiles.size == 1 && hasmFiles.isEmpty() -> {
-                        // 只有一个 .bundle 文件，自动加载用于反汇编
-                        val bundleFile = bundleFiles.first()
+                    result.bundleCount == 1 && result.hasmCount == 0 -> {
+                        // 只有一个 .bundle 文件，自动加载
+                        val outputDir = File(result.outputDir)
+                        val bundleFile = outputDir.walkTopDown()
+                            .first { it.isFile && it.extension.equals("bundle", ignoreCase = true) }
                         selectedFilePath = bundleFile.absolutePath
                         binding.filePathText.text = "已选择: ${bundleFile.name}\n路径: ${bundleFile.absolutePath}"
                         binding.disassembleButton.isEnabled = true
                         binding.assembleButton.isEnabled = false
-                        binding.cleanEnvironmentButton.isEnabled = true
                         appendLog("✓ 已自动加载 Bundle 文件: ${bundleFile.name}")
-                        Toast.makeText(this, "导入成功，已加载 ${bundleFile.name}", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this@MainActivity, "导入成功", Toast.LENGTH_SHORT).show()
                     }
-                    hasmFiles.isNotEmpty() || bundleFiles.isNotEmpty() -> {
-                        // 有多个可处理的文件
-                        val totalFiles = hasmFiles.size + bundleFiles.size
-                        appendLog("⚠ 发现 $totalFiles 个可处理文件（${hasmFiles.size} 个 HASM，${bundleFiles.size} 个 Bundle）")
+                    result.hasmCount > 0 || result.bundleCount > 0 -> {
+                        val totalFiles = result.hasmCount + result.bundleCount
+                        appendLog("⚠ 发现 $totalFiles 个可处理文件（${result.hasmCount} 个 HASM，${result.bundleCount} 个 Bundle）")
                         appendLog("提示：请使用'选择文件'按钮手动从导入目录选择")
-                        Toast.makeText(this, "导入成功，共 $fileCount 个文件", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this@MainActivity, "导入成功，共 ${result.fileCount} 个文件", Toast.LENGTH_SHORT).show()
                     }
                     else -> {
-                        // 没有可处理的文件
                         appendLog("⚠ 未发现可处理的文件（.hasm 或 .bundle）")
-                        Toast.makeText(this, "导入成功，共 $fileCount 个文件", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this@MainActivity, "导入成功，共 ${result.fileCount} 个文件", Toast.LENGTH_SHORT).show()
                     }
                 }
             } else {
-                outputDir.deleteRecursively()
-                appendLog("❌ ZIP 文件为空")
-                Toast.makeText(this, "ZIP 文件为空", Toast.LENGTH_SHORT).show()
+                appendLog("❌ 导入失败: ${result.error}")
+                Toast.makeText(this@MainActivity, "导入失败: ${result.error}", Toast.LENGTH_SHORT).show()
             }
-        } catch (e: Exception) {
-            appendLog("❌ 导入失败: ${e.message}")
-            Toast.makeText(this, "导入失败: ${e.message}", Toast.LENGTH_SHORT).show()
+            
+            showProgress(false)
+            isOperationRunning = false
         }
     }
+    
+    private data class ImportResult(
+        val success: Boolean,
+        val outputDir: String,
+        val fileCount: Int,
+        val hasmCount: Int,
+        val bundleCount: Int,
+        val error: String = ""
+    )
     
     private fun showAboutDialog() {
         MaterialAlertDialogBuilder(this)
