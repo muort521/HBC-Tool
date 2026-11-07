@@ -5,6 +5,18 @@ echo HBC-Tool Android 快速构建脚本
 echo ========================================
 echo.
 
+REM ---- 使用本机已安装的环境（无需全局配置 JAVA_HOME / ANDROID_HOME）----
+REM JDK 21（AGP 8.2 / Gradle 8.9 兼容；Android Studio 自带的 JBR 是 JDK25，过新）
+if "%JAVA_HOME%"=="" set "JAVA_HOME=E:\home\jdk-21.0.12.1"
+REM 本机 Android SDK（已含 platform android-34 / build-tools 34.0.0 / NDK）
+if "%ANDROID_HOME%"=="" set "ANDROID_HOME=E:\home\SDK"
+if "%ANDROID_SDK_ROOT%"=="" set "ANDROID_SDK_ROOT=E:\home\SDK"
+set "PATH=%JAVA_HOME%\bin;%ANDROID_HOME%\platform-tools;%PATH%"
+
+echo 使用 JDK: %JAVA_HOME%
+echo 使用 SDK: %ANDROID_HOME%
+echo.
+
 echo [1/4] 检查环境...
 where gradlew.bat >nul 2>&1
 if %errorlevel% neq 0 (

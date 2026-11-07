@@ -12,14 +12,14 @@ android {
         applicationId = "com.hbctool.android"
         minSdk = 24
         targetSdk = 34
-        versionCode = 2
-        versionName = "1.1"
+        versionCode = 3
+        versionName = "1.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         
-        // 配置支持的 CPU 架构
+        // 配置支持的 CPU 架构（含 x86_64 以支持模拟器）
         ndk {
-            abiFilters += listOf("armeabi-v7a", "arm64-v8a")
+            abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86_64")
         }
     }
 
@@ -63,7 +63,12 @@ chaquopy {
         version = "3.8"
         
         // 指定构建时使用的 Python（避免使用 Python 3.13+ 因为缺少 cgi 模块）
-        buildPython("C:/Users/42201/AppData/Local/Programs/Python/Python311/python.exe")
+        // 优先使用本机已安装的 Python（在 gradle.properties 中通过 chaquopy.buildPython 配置），
+        // 未配置时回退到本机 Python 3.10。
+        buildPython(
+            (findProperty("chaquopy.buildPython") as String?)
+                ?: "C:/Program Files/Python310/python.exe"
+        )
         
         pip {
             install("construct==2.10.68")
